@@ -22,3 +22,10 @@ type Reminder struct {
 	Enabled     bool
 	ScheduledAt time.Time
 }
+
+type WaitingState struct {
+	ID          uint `gorm:"primaryKey"`
+	UserID      int64
+	State       uint8
+	Param       string
+}

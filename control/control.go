@@ -1,49 +1,87 @@
 package control
 
 import (
-	"github.com/adeptusmortem/workout-bot/database"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-)
+	"time"
 
-const (
-	sTodaysSchedule		string = "Расписание на сегодня"
-	sWeekSchedule 		string = "Расписание на неделю"
-	sReminder			string = "Напоминание"
-	sChangeScheduleDay 	string = "Изменить расписание"
-	sClueToday			string = "Введите команду " + sChangeTodayCommand + " и новое расписание"
-	sReturnToMenu		string = "Вернуться назад"
-	sMenuText			string = "Выберите опцию:"
-	sDefaultText		string = "Я не понимаю эту команду."
-	sReminderEnable		string = "Вкл/Выкл"
-	sReminderChange		string = "Изменить время уведомления"
-	sStartCommand		string = "/start"
-	sChangeTodayCommand	string = "/сегодня"
-	sChangeDayCommand	string = "/изменить"
+	"github.com/adeptusmortem/workout-bot/database"
+	"github.com/adeptusmortem/workout-bot/e"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 // Обработка сообщения
 func HandleUpdate(update tgbotapi.Update) tgbotapi.MessageConfig {
-	switch update.Message.Text {
-		case sStartCommand:
-			database.CreateUser(update.Message.Chat.ID)
-			return createMainMenu(update)
-		case sTodaysSchedule:
-			return createTodayMenu(update)
-		case sWeekSchedule:
-			return createWeakMenu(update)
-		case sReminder:
-			return createReminderMenu(update)
-		case sChangeScheduleDay:
-			return changeDaySchedule(update)
-		case sReturnToMenu:
-			return createMainMenu(update)
+
+	state, err := database.GetWaitingState(update.Message.Chat.ID)
+	e.HandleError(err)
+
+	switch state {
+		case sStateNotFound:
+			switch update.Message.Text {
+				case "/start":
+				database.CreateUser(update.Message.Chat.ID)
+				database.ChangeWaitingState(update.Message.Chat.ID, sStateFree)
+				return createMainMenu(update)
+			default:
+				return tgbotapi.NewMessage(update.Message.Chat.ID, "Напишите /start для начала пользовнаия ботом")
+			}
+		case sStateFree:
+			if update.Message.IsCommand() {
+				switch update.Message.Command() {
+				case sStartCommand:
+					return createMainMenu(update)
+				default:
+					return unknownMsg(update)
+				}
+			} else {
+			switch update.Message.Text {
+				case sTodaysSchedule:
+					return createTodayMenu(update)
+				case sWeekSchedule:
+					return createWeakMenu(update)
+				case sReminder:
+					return createReminderMenu(update)
+				case sChangeScheduleToday:
+					return changeTodaySchedule(update)
+				case sReturnToMenu:
+					return createMainMenu(update)
+				default:
+					return unknownMsg(update)
+				}
+			}
+		case sStateWaitingWeekdayShow:
+			switch update.Message.Text {
+				case sChangeScheduleDay:
+					return changeDaySchedule(update)
+				case sReturnToMenu:
+					return createMainMenu(update)
+				default:
+					return showSchedule(update)
+			}
+		case sStateWaitingWeekdayChange:
+			switch update.Message.Text {
+				case sReturnToMenu:
+					return createMainMenu(update)
+				default:
+					return makeNewSchedule(update)
+			}
+		case sStateWaitingSchedule:
+			switch update.Message.Text {
+				case sReturnToMenu:
+					return createMainMenu(update)
+				default:
+					return handleNewSchedule(update)
+			}
 		default:
-			return commandHandler(update)
+			database.ChangeWaitingState(update.Message.Chat.ID, sStateFree)
+			return createMainMenu(update)
+
 	}
+
 }
 
 // Создание основного меню
 func createMainMenu(update tgbotapi.Update) tgbotapi.MessageConfig {
+	database.ChangeWaitingState(update.Message.Chat.ID, sStateFree)
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, sMenuText)
 	msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
@@ -61,18 +99,36 @@ func createTodayMenu(update tgbotapi.Update) tgbotapi.MessageConfig {
 	msg.Text, _ = database.GetTodayWorkout(update.Message.Chat.ID)
 	msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton(sChangeScheduleDay),
+			tgbotapi.NewKeyboardButton(sChangeScheduleToday),
+		),
+		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton(sReturnToMenu),
 		),
 	)
 	return msg
 }
 
-// Создание меню на неделю
-func createWeakMenu(update tgbotapi.Update) tgbotapi.MessageConfig {
+// Создать меню изменения расписания на сегодня
+func changeTodaySchedule(update tgbotapi.Update) tgbotapi.MessageConfig {
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
-	msg.Text = "*тут расписание на неделю*"
+	msg.Text = sAskNewWorkout
+	database.ChangeWaitingState(update.Message.Chat.ID, sStateWaitingSchedule)
+	database.ChangeWaitingParam(update.Message.Chat.ID, time.Now().Weekday().String())
 	msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton(sReturnToMenu),
+		),
+	)
+	return msg
+}
+
+// Создание меню расписаний на неделю
+func createWeakMenu(update tgbotapi.Update) tgbotapi.MessageConfig {
+	database.ChangeWaitingState(update.Message.Chat.ID, sStateWaitingWeekdayShow)
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
+	msg.Text = sChooseWeekdayToShow
+	msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(
+		makeWeekdaysRow(),
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton(sChangeScheduleDay),
 			tgbotapi.NewKeyboardButton(sReturnToMenu),
@@ -81,10 +137,75 @@ func createWeakMenu(update tgbotapi.Update) tgbotapi.MessageConfig {
 	return msg
 }
 
+// Показывает расписание на выбранный день
+func showSchedule(update tgbotapi.Update) tgbotapi.MessageConfig {
+	day, err := parseWeekday(update.Message.Text)
+	e.HandleError(err)
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
+	if err != nil {
+		return unknownMsg(update)
+	}
+	msg.Text, _ = database.GetWorkout(update.Message.Chat.ID, day)
+	msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton(sReturnToMenu),
+		),
+	)
+	return msg
+}
+
 // Создать меню изменения расписания
 func changeDaySchedule(update tgbotapi.Update) tgbotapi.MessageConfig {
+	database.ChangeWaitingState(update.Message.Chat.ID, sStateWaitingWeekdayChange)
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
-	msg.Text = sClueToday
+	msg.Text = sAskDay
+	msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(
+		makeWeekdaysRow(),
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton(sReturnToMenu),
+		),
+	)
+	return msg
+}
+
+// Создать меню ввода новой тренировки на выбранный день
+func makeNewSchedule (update tgbotapi.Update) tgbotapi.MessageConfig {
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
+	
+	if _, exists := daysOfWeek[update.Message.Text]; !exists {
+		msg.Text = sDaysScheduleUnchanged
+		msg.ReplyMarkup = createMainMenu(update).ReplyMarkup
+	}
+	msg.Text = sAskNewWorkout
+	database.ChangeWaitingState(update.Message.Chat.ID, sStateWaitingSchedule)
+	database.ChangeWaitingParam(update.Message.Chat.ID, update.Message.Text)
+	msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton(sReturnToMenu),
+		),
+	)
+	return msg
+}
+
+// Обработка нового расписания
+func handleNewSchedule (update tgbotapi.Update) tgbotapi.MessageConfig {
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
+	msg.ReplyMarkup = createMainMenu(update).ReplyMarkup
+
+	sDay, err := database.GetWaitingParam(update.Message.Chat.ID)
+	e.HandleError(err)
+
+	database.ChangeWaitingState(update.Message.Chat.ID, sStateFree)
+
+	day, err := parseWeekday(sDay)
+	e.HandleError(err)
+
+	if (err != nil) || (len(update.Message.Text) == 0) {
+		msg.Text = sDaysScheduleUnchanged
+		return msg
+	}
+	e.HandleError(database.ChangeDayWorkout(update.Message.Chat.ID, update.Message.Text, day))
+	msg.Text = sDaysScheduleChanged
 	return msg
 }
 
@@ -96,6 +217,8 @@ func createReminderMenu(update tgbotapi.Update) tgbotapi.MessageConfig {
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton(sReminderEnable),
 			tgbotapi.NewKeyboardButton(sReminderChange),
+		),
+		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton(sReturnToMenu),
 		),
 	)
@@ -104,5 +227,25 @@ func createReminderMenu(update tgbotapi.Update) tgbotapi.MessageConfig {
 
 // Обработка неизвестной команды
 func unknownMsg(update tgbotapi.Update) tgbotapi.MessageConfig {
-	return tgbotapi.NewMessage(update.Message.Chat.ID, sDefaultText + " " + update.Message.Text)
+	database.ChangeWaitingState(update.Message.Chat.ID, sStateFree)
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "")
+	if update.Message.Text == "/start" {
+		return createMainMenu(update)
+	}
+	msg.Text = sDefaultText + " " + update.Message.Text
+	return msg
+}
+
+// Создает ров кнопок дней недели
+func makeWeekdaysRow() []tgbotapi.KeyboardButton {
+	result := tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton(Weekdays[0]),
+			tgbotapi.NewKeyboardButton(Weekdays[1]),
+			tgbotapi.NewKeyboardButton(Weekdays[2]),
+			tgbotapi.NewKeyboardButton(Weekdays[3]),
+			tgbotapi.NewKeyboardButton(Weekdays[4]),
+			tgbotapi.NewKeyboardButton(Weekdays[5]),
+			tgbotapi.NewKeyboardButton(Weekdays[6]),
+	)
+	return result
 }

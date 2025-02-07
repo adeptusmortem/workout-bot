@@ -32,7 +32,7 @@ func CreateUser(userID int64) error {
 // Получить данные о пользователе
 func GetUser(userID int64) (*User, error) {
 	var user User
-	err := DB.Preload("Schedules").Preload("Reminders").
+	err := DB.Preload("Schedules").Preload("Reminders").Preload("WaitingState").
 		First(&user, userID).Error
 	return &user, err
 }

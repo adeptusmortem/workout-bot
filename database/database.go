@@ -24,6 +24,7 @@ func AutoMigrate() error {
         &User{},
         &Schedule{},
         &Reminder{},
+        &WaitingState{},
     )
 }
 

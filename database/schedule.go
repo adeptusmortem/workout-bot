@@ -8,22 +8,33 @@ import (
 )
 
 const (
-	// sNoScheduleFound = "Нет данных"
+	sNoScheduleFound = "Нет данных"
 )
 
 func GetTodayWorkout(userID int64) (string, error) {
-	var schedule Schedule
-	today := time.Now().Weekday()
+    return GetWorkout(userID, time.Now().Weekday())
+}
 
-	result := DB.Where("user_id = ? AND day_of_week = ?", userID, today).
+func GetWorkout(userID int64, day time.Weekday) (string, error) {
+	var schedule Schedule
+
+	result := DB.Where("user_id = ? AND day_of_week = ?", userID, day).
 		First(&schedule)
 
-	if result.Error != nil {
-		// return sNoScheduleFound, result.Error
-		return makeSchedule(today), result.Error
+    if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+        // Расписание на выбраный день не найдено, создаем новое
+        schedule = Schedule{
+            UserID:     userID,
+            DayOfWeek:  day,
+            WorkoutPlan: makeSchedule(day),
+        }
+        result = DB.Create(&schedule)
+    } else if result.Error != nil {
+        // Другая ошибка
+		return sNoScheduleFound, result.Error
 	}
 
-	return schedule.WorkoutPlan, nil
+	return schedule.WorkoutPlan, result.Error
 }
 
 func ChangeTodayWorkout(userID int64, newWorkout string) error {
